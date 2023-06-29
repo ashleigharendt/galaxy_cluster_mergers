@@ -5,31 +5,31 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
-
+from memory_profiler import profile
 
 from keras.layers import Input, Flatten, Dense, Activation, Dropout, BatchNormalization, Conv2D, MaxPool2D, GlobalAveragePooling2D
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.models import Model, Sequential, model_from_json
-from tensorflow.keras.optimizers import Adam
-from keras import backend as K
-from tensorflow.python.keras import backend as K
-from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
-
-print('gpus:', K._get_available_gpus())
-
-from memory_profiler import profile
+from keras.optimizers import Adam
+import tensorflow as tf
+import gc
 
 import json
 
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from sklearn.metrics import roc_curve, precision_score, recall_score, accuracy_score, roc_auc_score
 
+class CustomMemoryCallback(tf.keras.callbacks.Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        gc.collect()
+        tf.keras.backend.clear_session()
+
 class build_model():
     
     def __init__(self, X_train, y_train, X_valid, y_valid, X_test, y_test, \
                  model_type='', classification='binary', learning_rate=0.0001, num_conv_layers=3, \
-                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100], early_stopping_patience=15, pretrained=False):
+                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100,64,32], early_stopping_patience=15):
         
         self.X_tr = X_train
         self.y_tr = y_train
@@ -50,76 +50,38 @@ class build_model():
         self.batch_norm = batch_norm
         self.i_num_filters = init_num_filters
         self.esp = early_stopping_patience
-        self.pretrained = pretrained
         
     def define_model(self):
         
         imsize = self.X_tr.shape[1]
+        num_channels = self.X_tr.shape[3]
+
+        input_shape = (imsize, imsize, num_channels)
+
+        self.model = Sequential()
         
-        if self.pretrained:
-            self.X_tr = np.repeat(self.X_tr, 3, axis=3)
-            self.X_v = np.repeat(self.X_v, 3, axis=3)
-            self.X_te = np.repeat(self.X_te, 3, axis=3)
-            
-            self.X_tr = preprocess_input(self.X_tr)
-            self.X_v = preprocess_input(self.X_v)
-            self.X_te = preprocess_input(self.X_te)
-            
-            rn_model = ResNet50(
-                weights='imagenet',  # Load weights pre-trained on ImageNet.
-                input_shape=(96, 96, 3),
-                include_top=False)
-            
-            rn_model.trainable = False
-            
-            for layer in rn_model.layers[-4:]:
-                layer.trainable = True
-            
-            num_channels = self.X_tr.shape[3]
-            input_shape = (imsize, imsize, num_channels)
-            
-            inputs = Input(shape=input_shape)
-
-            x = rn_model(inputs, training=True)
-            x = GlobalAveragePooling2D()(x)
-            outputs = Dense(1)(x)
-            
-            self.model = Model(inputs, outputs)
-            
-        else:
-            num_channels = self.X_tr.shape[3]
-            input_shape = (imsize, imsize, num_channels)
-
-            self.model = Sequential()
-
-            # Convolutional layers
-            self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu', input_shape = input_shape))
-
+        # Convolutional layers
+        self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu', input_shape = input_shape))
+        
+        if self.batch_norm:
+            self.model.add(BatchNormalization())
+        self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))
+        
+        for i in range(1, self.ncl):
+            self.model.add(Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation ='relu'))
             if self.batch_norm:
                 self.model.add(BatchNormalization())
-            self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))
+            self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))            
 
-            for i in range(1, self.ncl):
-                self.model.add(Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation ='relu'))
-                if self.batch_norm:
-                    self.model.add(BatchNormalization())
-                self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))            
-
-            # Fully connected
-            self.model.add(GlobalAveragePooling2D())
-
-            for i in range(0, (self.ndl - 2)):        
-                self.model.add(Dense(self.dnl[i], activation = "relu"))
-                if self.drop > 0:
-                    self.model.add(Dropout(self.drop))
-
-            self.model.add(Dense(64, activation = "relu"))
+        # Fully connected
+        self.model.add(GlobalAveragePooling2D())
+        
+        for i in range(0, self.ndl):        
+            self.model.add(Dense(self.dnl[i], activation = "relu"))
             if self.drop > 0:
-                    self.model.add(Dropout(self.drop))
-            self.model.add(Dense(32, activation = "relu"))
-            if self.drop > 0:
-                    self.model.add(Dropout(self.drop))              
-            self.model.add(Dense(1, activation = "sigmoid", name="preds"))
+                self.model.add(Dropout(self.drop))
+                      
+        self.model.add(Dense(1, activation = "sigmoid", name="preds"))
 
     def compile_model(self):
         
@@ -130,12 +92,13 @@ class build_model():
         loss = 'binary_crossentropy'
         self.model.compile(loss=loss, optimizer=optimizer, metrics=fit_metrics)
         self.model.summary()
-                           
+    
     def train_model(self, verbose):
         
         self.compile_model()
     
-        es = EarlyStopping(monitor='val_loss', patience=self.esp)                
+        es = EarlyStopping(monitor='val_loss', patience=self.esp) 
+#         mem = CustomMemoryCallback()
                            
         # Train
         self.history = self.model.fit(self.X_tr, self.y_tr, 
@@ -156,28 +119,27 @@ class build_model():
         acc = self.history.history['accuracy']
         val_acc = self.history.history['val_accuracy']
 
-#        epochs = list(range(len(loss)))
+        epochs = list(range(len(loss)))
 
-#        figsize = (8, 6)
-#        fig, axis1 = plt.subplots(figsize=figsize)
-#        plot1_lacc = axis1.plot(epochs, acc, 'navy', label='accuracy')
-#        plot1_val_lacc = axis1.plot(epochs, val_acc, 'deepskyblue', label="validation accuracy")
+        figsize = (8, 6)
+        fig, axis1 = plt.subplots(figsize=figsize)
+        plot1_lacc = axis1.plot(epochs, acc, 'navy', label='accuracy')
+        plot1_val_lacc = axis1.plot(epochs, val_acc, 'deepskyblue', label="validation accuracy")
 
-#        plot1_loss = axis1.plot(epochs, loss, 'red', label='loss')
-#        plot1_val_loss = axis1.plot(epochs, val_loss, 'lightsalmon', label="validation loss")
-#
-#        plots = plot1_loss + plot1_val_loss
-#        labs = [plot.get_label() for plot in plots]
-#        axis1.set_xlabel('Epoch')
-#        axis1.set_ylabel('Loss/Accuracy')
-#        plt.title("Loss/Accuracy History (Pristine Images)")
-#        plt.tight_layout()
-#        axis1.legend(loc='upper left')
-#        plt.show()
+        plot1_loss = axis1.plot(epochs, loss, 'red', label='loss')
+        plot1_val_loss = axis1.plot(epochs, val_loss, 'lightsalmon', label="validation loss")
 
-        
+        plots = plot1_loss + plot1_val_loss
+        labs = [plot.get_label() for plot in plots]
+        axis1.set_xlabel('Epoch')
+        axis1.set_ylabel('Loss/Accuracy')
+        plt.title("Loss/Accuracy History (Pristine Images)")
+        plt.tight_layout()
+        axis1.legend(loc='upper left')
+        plt.show()
+
     def output_results(self):
-
+    
         predictions = self.model.predict(self.X_te)
         threshold = 0.5
         y_prob = np.array(predictions)
@@ -208,7 +170,4 @@ class build_model():
             # serialize weights to HDF5
         self.model.save_weights(loc + '/' + model_name + '.h5')
         print("Saved model to", loc + '/' + model_name + '.json')
-
-#     def output_results():
-#         # need some kind of function which tests results on the test set and outputs some metrics - create a dataframe with all optimisation params and then AUC, Prec, Recall, Train time, how many epochs did it converge after? like early stopping time
-                      
+       
