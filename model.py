@@ -29,7 +29,9 @@ class build_model():
     
     def __init__(self, X_train, y_train, X_valid, y_valid, X_test, y_test, \
                  model_type='', classification='binary', learning_rate=0.0001, num_conv_layers=3, \
-                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100], early_stopping_patience=15, pretrained=False):
+                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, \
+                batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100], \
+                early_stopping_patience=15, pretrained=False, n_layers_unfrozen=0):
         
         self.X_tr = X_train
         self.y_tr = y_train
@@ -51,6 +53,7 @@ class build_model():
         self.i_num_filters = init_num_filters
         self.esp = early_stopping_patience
         self.pretrained = pretrained
+        self.n_layers_unfrozen = n_layers_unfrozen
         
     def define_model(self):
         
@@ -72,15 +75,20 @@ class build_model():
             
             rn_model.trainable = False
             
-            for layer in rn_model.layers[-4:]:
-                layer.trainable = True
+            if self.n_layers_unfrozen > 0:
+                for layer in rn_model.layers[-self.n_layers_unfrozen:]:
+                    layer.trainable = True
+                training=True
+            else:
+                training=False
             
             num_channels = self.X_tr.shape[3]
             input_shape = (imsize, imsize, num_channels)
             
             inputs = Input(shape=input_shape)
 
-            x = rn_model(inputs, training=True)
+            x = rn_model(inputs, training=training)
+
             x = GlobalAveragePooling2D()(x)
             outputs = Dense(1)(x)
             
