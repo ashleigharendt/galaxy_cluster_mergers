@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# In[ ]:
+
+
 import os, sys, glob
 from astropy.io import fits
 import pandas as pd
@@ -11,7 +14,7 @@ from sklearn.model_selection import train_test_split, KFold
 
 class data_preprocess():
     
-    def __init__(self, redshifts=[1,2,3], classification='binary', folding=False, num_pixel=96, nproj = 29, channels=['sz'], normalise = True):
+    def __init__(self, redshifts=[1,2], classification='binary', folding=False, num_pixel=96, nproj = 29, channels=['sz'], normalise = True, smoothing=False):
         
         self.redshifts = redshifts
         self.classification = classification
@@ -20,21 +23,34 @@ class data_preprocess():
         self.nproj = nproj
         self.channels = channels # list containing either 'sz', 'xray' or both
         self.normalise = normalise
+        self.smoothing=smoothing
         
 #         if len(self.channels) < 2:
 #             self.normalise = True
 #         else:
 #             self.normalise = False
-
-        print('data preprocess has been called')
     
     def get_snapshot_list(self):
         
         # Loading merging population
-        full_sample = pd.read_csv('/nfs/scratch/arendtas/the_three_hundred/cluster_list/full_sample.csv')
-
+        merging_cluster_list = pd.read_csv('../generating_cluster_list/lists/output_merger_list_75_10000_haloID.csv')
+        merging_cluster_list = merging_cluster_list.rename({'merger_state': 'label'}, axis=1)
+        
         # Filter for certain redshift bins
-        full_sample = full_sample[full_sample['z_bin'].isin(self.redshifts)].reset_index(drop=True)
+        merging_cluster_list = merging_cluster_list[merging_cluster_list['z_bin'].isin(self.redshifts)]
+        
+        # If working on a binary classification problem, just select the merging clusters ignoring pre / post
+        if self.classification == 'binary':
+            merging_sample = merging_cluster_list[merging_cluster_list['label'] == 'merging']
+            
+        # Loading control population
+        control_sample = pd.read_csv('../generating_cluster_list/lists/output_control_sample.csv', index_col=False)
+        
+        # Filter for certain redshift bins
+        control_sample = control_sample[control_sample['z_bin'].isin(self.redshifts)]
+
+        # Full sample list
+        full_sample = pd.concat([control_sample, merging_sample[control_sample.columns]]).reset_index(drop=True)
         
         return full_sample
         
@@ -47,15 +63,15 @@ class data_preprocess():
         snapname = 'snap_'+s_str
 
         if label == 'merging':
-            parent_dir = "/nfs/scratch/arendtas/the_three_hundred/varying_z/sz/merging/"
+            parent_dir = "/home/ashleigh/mock_map_generator/generating_sz_maps/clusters/varying_AR/merging/method_final/"
         elif label == 'control':
-            parent_dir = "/nfs/scratch/arendtas/the_three_hundred/varying_z/sz/control/"
+            parent_dir = "/home/ashleigh/mock_map_generator/generating_sz_maps/clusters/varying_AR/control/method_final/"
 
         fits_files = glob.glob(parent_dir + cname + snapname + '*.fits')
         
         return fits_files
     
-    def get_fits_file_loc_xr(self, reg, snap, label, smoothing=False, energy_range='0.1_15.0'):
+    def get_fits_file_loc_xr(self, reg, snap, label, smoothing, energy_range='0.1_15.0'):
         
         if smoothing:
             loc = 'sph'
@@ -79,7 +95,7 @@ class data_preprocess():
             full_sample['fits_file_locs_sz'] = full_sample.apply(lambda x: self.get_fits_file_loc_sz(x['region'], x['snapshot'], x['label']), axis=1)
         
         if 'xray' in self.channels:
-            full_sample['fits_file_locs_xray'] = full_sample.apply(lambda x: self.get_fits_file_loc_xr(x['region'], x['snapshot'], x['label']), axis=1)
+            full_sample['fits_file_locs_xray'] = full_sample.apply(lambda x: self.get_fits_file_loc_xr(x['region'], x['snapshot'], x['label'], smoothing=self.smoothing), axis=1)
             
         sz_X_list = []
         sz_y_list = []
@@ -88,8 +104,7 @@ class data_preprocess():
         
         def sort_imgs(f, X_list, y_list):
             fits_file = fits.open(f, ignore_missing_simple=True)
-            img = cv2.resize(np.array(Image.fromarray(fits_file[0].data)), dsize=(self.npxl, self.npxl), interpolation=cv2.INTER_AREA) 
-            X_list.append(img)
+            X_list.append(np.array(Image.fromarray(fits_file[0].data)))
             # np.array(Image.fromarray(fits_file[0].data))
             if row['label'] == 'merging':
                 label_ind = 1
@@ -111,8 +126,7 @@ class data_preprocess():
     def resize_and_reshape(self, sz_X_list, sz_y_list, xray_X_list, xray_y_list):
         
         if 'sz' in self.channels:
-#             sz_imgs_r = [cv2.resize(img, dsize=(self.npxl, self.npxl), interpolation=cv2.INTER_AREA) for img in sz_X_list]
-            sz_imgs_r = [img for img in sz_X_list]
+            sz_imgs_r = [cv2.resize(img, dsize=(self.npxl, self.npxl), interpolation=cv2.INTER_AREA) for img in sz_X_list]
             sz_imgs_r = np.asarray(sz_imgs_r).astype('float32')
             sz_y = np.array(sz_y_list)
 
@@ -123,7 +137,6 @@ class data_preprocess():
 
         if len(self.channels) == 2:
             self.X = np.stack((sz_imgs_r, xray_imgs_r), axis=3)
-            print(self.X)
             self.y = sz_y
 
         elif self.channels == ['sz']:
@@ -171,13 +184,28 @@ class data_preprocess():
                 self.valid_dict[i] = valid_set  
                 
     def normalise_arr(self, training_set, arr_to_normalise):
+        
+        if len(self.channels) > 1:
+            n_channels = len(self.channels)
+            
+            sz_imgs_n = arr_to_normalise.copy()
+            
+            for c in range(n_channels):
+                flat_sz_vals = training_set[:,:,:,c].flatten()
+
+                glob_sz_mean = np.mean(flat_sz_vals)
+                glob_sz_std = np.std(flat_sz_vals)
+
+                sz_imgs_n[:,:,:,c] = (arr_to_normalise[:,:,:,c] - glob_sz_mean) / glob_sz_std
+            
+        else:
     
-        flat_sz_vals = training_set.flatten()
+            flat_sz_vals = training_set.flatten()
 
-        glob_sz_mean = np.mean(flat_sz_vals)
-        glob_sz_std = np.std(flat_sz_vals)
+            glob_sz_mean = np.mean(flat_sz_vals)
+            glob_sz_std = np.std(flat_sz_vals)
 
-        sz_imgs_n = (arr_to_normalise - glob_sz_mean) / glob_sz_std
+            sz_imgs_n = (arr_to_normalise - glob_sz_mean) / glob_sz_std
     
         return sz_imgs_n  
          
@@ -185,7 +213,6 @@ class data_preprocess():
         
         # Iteration is optional depending on whether folding
         full_sample=self.get_snapshot_list()
-        print('about to load images')
         self.train_val_test_split(test_p, full_sample)
          
         if len(input_arrays) == 0:
