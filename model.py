@@ -29,7 +29,9 @@ class build_model():
     
     def __init__(self, X_train, y_train, X_valid, y_valid, X_test, y_test, \
                  model_type='', classification='binary', learning_rate=0.0001, num_conv_layers=3, \
-                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100,64,32], early_stopping_patience=15):
+                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, \
+                batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100], \
+                early_stopping_patience=15, pretrained=False, n_layers_unfrozen=0):
         
         self.X_tr = X_train
         self.y_tr = y_train
@@ -50,6 +52,8 @@ class build_model():
         self.batch_norm = batch_norm
         self.i_num_filters = init_num_filters
         self.esp = early_stopping_patience
+        self.pretrained = pretrained
+        self.n_layers_unfrozen = n_layers_unfrozen
         
     def define_model(self):
         
@@ -60,15 +64,50 @@ class build_model():
 
         self.model = Sequential()
         
-        # Convolutional layers
-        self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu', input_shape = input_shape))
-        
-        if self.batch_norm:
-            self.model.add(BatchNormalization())
-        self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))
-        
-        for i in range(1, self.ncl):
-            self.model.add(Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation ='relu'))
+        if self.pretrained:
+            self.X_tr = np.repeat(self.X_tr, 3, axis=3)
+            self.X_v = np.repeat(self.X_v, 3, axis=3)
+            self.X_te = np.repeat(self.X_te, 3, axis=3)
+            
+            self.X_tr = preprocess_input(self.X_tr)
+            self.X_v = preprocess_input(self.X_v)
+            self.X_te = preprocess_input(self.X_te)
+            
+            rn_model = ResNet50(
+                weights='imagenet',  # Load weights pre-trained on ImageNet.
+                input_shape=(96, 96, 3),
+                include_top=False)
+            
+            rn_model.trainable = False
+            
+            if self.n_layers_unfrozen > 0:
+                for layer in rn_model.layers[-self.n_layers_unfrozen:]:
+                    layer.trainable = True
+                training=True
+            else:
+                training=False
+            
+            num_channels = self.X_tr.shape[3]
+            input_shape = (imsize, imsize, num_channels)
+            
+            inputs = Input(shape=input_shape)
+
+            x = rn_model(inputs, training=training)
+
+            x = GlobalAveragePooling2D()(x)
+            outputs = Dense(1)(x)
+            
+            self.model = Model(inputs, outputs)
+            
+        else:
+            num_channels = self.X_tr.shape[3]
+            input_shape = (imsize, imsize, num_channels)
+
+            self.model = Sequential()
+
+            # Convolutional layers
+            self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu', input_shape = input_shape))
+
             if self.batch_norm:
                 self.model.add(BatchNormalization())
             self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))            
