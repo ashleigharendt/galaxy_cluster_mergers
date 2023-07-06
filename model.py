@@ -111,7 +111,13 @@ class build_model():
             
             if self.batch_norm:
                 self.model.add(BatchNormalization())
-            self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))            
+            self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))  
+            
+            for i in range(1, self.ncl):
+                self.model.add(Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation ='relu'))
+                if self.batch_norm:
+                    self.model.add(BatchNormalization())
+                self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid')) 
 
         # Fully connected
         self.model.add(GlobalAveragePooling2D())
