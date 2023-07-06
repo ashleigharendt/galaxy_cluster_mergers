@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 import cv2
 from sklearn.model_selection import train_test_split, KFold
+<<<<<<< HEAD
 from datetime import datetime
 
 class data_preprocess():
@@ -96,6 +97,7 @@ class data_preprocess():
             full_sample['fits_file_locs_xray'] = full_sample.apply(lambda x: self.get_fits_file_loc_xr(x['region'], x['snapshot'], x['label'], smoothing=self.smoothing), axis=1)
             
         sz_X_list = []
+<<<<<<< HEAD
         xray_X_list = []
         y_list = []
         indices = []
@@ -117,7 +119,7 @@ class data_preprocess():
                 label_ind = 1
             elif row['label'] == 'control':
                 label_ind = 0
-            
+
             if 'sz' in self.channels:
                 for f in row['fits_file_locs_sz'][0:self.nproj]:     
                     sort_imgs(f, sz_X_list)
@@ -161,6 +163,7 @@ class data_preprocess():
 
         elif self.channels == ['xray']:
             self.X = xray_imgs_r.reshape(-1, self.npxl, self.npxl, 1)
+
     
     def train_val_test_split(self, test_p, full_sample):
     
@@ -237,6 +240,7 @@ class data_preprocess():
         
         print('resize and reshape')
         self.resize_and_reshape(sz_X_list, xray_X_list, y_list, indices)
+
         
         if self.folding:
             self.train_indices = self.train_dict[iteration['iteration']]
@@ -249,13 +253,13 @@ class data_preprocess():
         y_train = self.y[self.train_indices]
         y_valid = self.y[self.valid_indices]
         y_test = self.y[self.test_indices]
-        
+
         i_train = self.indices[self.train_indices]
         i_valid = self.indices[self.valid_indices]
         i_test = self.indices[self.test_indices]
         
         print('before norm', X_train)
-        
+
         if self.normalise:
             X_test = self.normalise_arr(X_train, X_test)
             X_valid = self.normalise_arr(X_train, X_valid)
@@ -294,7 +298,7 @@ class data_preprocess():
                 with open(f"./{folder_name}/readme.txt", 'w') as f:
                     f.write(readme)
                 
-        
+
         return X_train, X_valid, X_test, y_train, y_valid, y_test
             
         
