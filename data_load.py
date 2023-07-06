@@ -252,13 +252,16 @@ class data_preprocess():
         
         i_train = self.indices[self.train_indices]
         i_valid = self.indices[self.valid_indices]
-        i_test = self.indices[self.test_indices]        
+        i_test = self.indices[self.test_indices]
+        
+        print('before norm', X_train)
         
         if self.normalise:
             X_test = self.normalise_arr(X_train, X_test)
             X_valid = self.normalise_arr(X_train, X_valid)
             X_train = self.normalise_arr(X_train, X_train)
-
+        
+        print('after norm', X_train)
             
         if self.save == True:
             # check whether folder exists then save full sample + training sets + indices mapping to a folder
