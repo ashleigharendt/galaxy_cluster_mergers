@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from memory_profiler import profile
 
-from keras.layers import Input, Flatten, Dense, Activation, Dropout, BatchNormalization, Conv2D, MaxPool2D, GlobalAveragePooling2D
+from keras.layers import Input, Flatten, Dense, Activation, Dropout, BatchNormalization, \
+Conv2D, MaxPool2D, GlobalAveragePooling2D, Normalization
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.models import Model, Sequential, model_from_json
@@ -31,7 +32,7 @@ class build_model():
     
     def __init__(self, X_train=None, y_train=None, X_valid=None, y_valid=None, X_test=None, y_test=None, \
                  model_type='', classification='binary', learning_rate=0.0001, num_conv_layers=3, \
-                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100,64,32], early_stopping_patience=15, readme=None, pretrained=False, n_layers_unfrozen=0):
+                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100,64,32], early_stopping_patience=15, readme=None, pretrained=False, n_layers_unfrozen=0, normalise=True):
         
         self.X_tr = X_train
         self.y_tr = y_train
@@ -55,6 +56,12 @@ class build_model():
         self.readme = readme
         self.pretrained = pretrained
         self.n_layers_unfrozen = n_layers_unfrozen
+        self.normalise = normalise
+        
+    def preprocessing_layer(self):
+        
+        self.norm_layer = Normalization()
+        self.norm_layer.adapt(self.X_tr)       
         
     def define_model(self):
         
@@ -64,6 +71,10 @@ class build_model():
         input_shape = (imsize, imsize, num_channels)
 
         self.model = Sequential()
+        
+        if self.normalise:
+            print('Adding layer')
+            self.model.add(self.norm_layer)
 
         if self.pretrained:
             self.X_tr = np.repeat(self.X_tr, 3, axis=3)
@@ -104,8 +115,6 @@ class build_model():
             num_channels = self.X_tr.shape[3]
             input_shape = (imsize, imsize, num_channels)
 
-            self.model = Sequential()
-
             # Convolutional layers
             self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu', input_shape = input_shape))
             
@@ -132,6 +141,8 @@ class build_model():
 
     def compile_model(self):
         
+        if self.normalise:
+            self.preprocessing_layer()
         self.define_model()
         # Compile Model
         optimizer = Adam(learning_rate=self.lr)

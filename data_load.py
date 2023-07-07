@@ -11,7 +11,6 @@ import numpy as np
 from PIL import Image
 import cv2
 from sklearn.model_selection import train_test_split, KFold
-<<<<<<< HEAD
 from datetime import datetime
 
 class data_preprocess():
@@ -97,7 +96,6 @@ class data_preprocess():
             full_sample['fits_file_locs_xray'] = full_sample.apply(lambda x: self.get_fits_file_loc_xr(x['region'], x['snapshot'], x['label'], smoothing=self.smoothing), axis=1)
             
         sz_X_list = []
-<<<<<<< HEAD
         xray_X_list = []
         y_list = []
         indices = []
@@ -133,9 +131,6 @@ class data_preprocess():
                     if len(self.channels) == 1:
                         indices.append(index)
                         y_list.append(label_ind)
-           
-        print(xray_X_list[0:4])
-        print(sz_X_list[0:4])
                     
         return sz_X_list, xray_X_list, y_list, indices
     
@@ -210,11 +205,10 @@ class data_preprocess():
             
             for c in range(n_channels):
                 flat_sz_vals = training_set[:,:,:,c].flatten()
-
-                glob_sz_mean = np.mean(flat_sz_vals)
-                glob_sz_std = np.std(flat_sz_vals)
-
-                sz_imgs_n[:,:,:,c] = (arr_to_normalise[:,:,:,c] - glob_sz_mean) / glob_sz_std
+                
+                self.glob_sz_mean = np.mean(flat_sz_vals)
+                self.glob_sz_std = np.std(flat_sz_vals)
+                sz_imgs_n[:,:,:,c] = (arr_to_normalise[:,:,:,c] - self.glob_sz_mean) / self.glob_sz_std
             
         else:
     
@@ -258,14 +252,11 @@ class data_preprocess():
         i_valid = self.indices[self.valid_indices]
         i_test = self.indices[self.test_indices]
         
-        print('before norm', X_train)
 
         if self.normalise:
             X_test = self.normalise_arr(X_train, X_test)
             X_valid = self.normalise_arr(X_train, X_valid)
             X_train = self.normalise_arr(X_train, X_train)
-        
-        print('after norm', X_train)
             
         if self.save == True:
             # check whether folder exists then save full sample + training sets + indices mapping to a folder
@@ -293,12 +284,11 @@ class data_preprocess():
             if self.readme is not None:
                 readme = self.readme + '\n' + \
                     f'z={self.redshifts} \nfolding = {self.folding} \nnum_pixel = {self.npxl} \nnproj = {self.nproj}' \
-                    f'\nchannels = {self.channels} \nnormalise= {self.normalise} \nsmoothing={self.smoothing}'
+                    f'\nchannels = {self.channels} \nnormalise= {self.normalise} \nsmoothing={self.smoothing}' 
                     
                 with open(f"./{folder_name}/readme.txt", 'w') as f:
                     f.write(readme)
                 
-
         return X_train, X_valid, X_test, y_train, y_valid, y_test
             
         
