@@ -20,7 +20,7 @@ import os
 import json
 from datetime import datetime
 
-from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.metrics import average_precision_score, precision_recall_curve, confusion_matrix
 from sklearn.metrics import roc_curve, precision_score, recall_score, accuracy_score, roc_auc_score
 
 class CustomMemoryCallback(tf.keras.callbacks.Callback):
@@ -196,7 +196,7 @@ class build_model():
         axis1.legend(loc='upper left')
         plt.show()
 
-    def output_results(self, model=None, X_te=None, y_te=None):
+    def output_results(self, model=None, X_te=None, y_te=None, threshold=0.5):
         
         if model is None:
             model = self.model
@@ -209,7 +209,7 @@ class build_model():
 
         threshold = 0.5
         y_prob = np.array(predictions)
-        y_pred = np.array([1 if x > 0.5 else 0 for x in predictions])
+        y_pred = np.array([1 if x > threshold else 0 for x in predictions])
         
         
         fpr, tpr, thresholds = roc_curve(y_te, y_prob)
@@ -225,7 +225,9 @@ class build_model():
         
         print('AUC:', auc, '\nPrecision:', prec, '\nRecall:', recall, '\nAccuracy:', acc)
         
-        return auc, prec, recall, acc
+        cm = confusion_matrix(y_te, y_pred)
+        
+        return auc, prec, recall, acc, cm
     
     def save_model(self):
         
@@ -237,11 +239,14 @@ class build_model():
         else:
             print(folder_name, "folder already exists.")
             
+        auc, prec, recall, acc, cm = output_results()
+            
         if self.readme is not None:
             readme = self.readme + '\n' + \
             f'model_type={self.model_type} \nlearning_rate = {self.lr} \nnum_conv_layers = {self.ncl} \nnum_dense_layers = {self.ndl}' \
             f'\nkernel_size = {self.ks} \ndropout_perc= {self.drop} \nbatch_size={self.batch_size} \nn_epochs={self.n_epochs}' \
-            f'\nbatch_norm = {self.batch_norm} \ninit_num_filters= {self.i_num_filters} \nearly_stopping_patience= {self.esp}'
+            f'\nbatch_norm = {self.batch_norm} \ninit_num_filters= {self.i_num_filters} \nearly_stopping_patience= {self.esp}' \
+            f'RESULTS \n auc= {auc}, prec={prec}, recall={recall}, acc={acc} \ncm = {cm}'
 
             with open(f"./{folder_name}/readme.txt", 'w') as f:
                 f.write(readme)
