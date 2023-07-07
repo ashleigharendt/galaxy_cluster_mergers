@@ -239,7 +239,7 @@ class build_model():
         else:
             print(folder_name, "folder already exists.")
             
-        auc, prec, recall, acc, cm = output_results()
+        auc, prec, recall, acc, cm = self.output_results()
             
         if self.readme is not None:
             readme = self.readme + '\n' + \
@@ -252,6 +252,8 @@ class build_model():
                 f.write(readme)
         
         model_json = self.model.to_json()
+
+        self.model.save(folder_name + '/model' ,save_format='tf') 
 
         with open(folder_name + '/model.json', "w") as json_file:
             json_file.write(model_json)
