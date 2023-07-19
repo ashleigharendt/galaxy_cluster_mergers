@@ -16,12 +16,14 @@ from keras.optimizers import Adam
 import tensorflow as tf
 import gc
 import os
+import pandas as pd
 
 import json
 from datetime import datetime
 
 from sklearn.metrics import average_precision_score, precision_recall_curve, confusion_matrix
 from sklearn.metrics import roc_curve, precision_score, recall_score, accuracy_score, roc_auc_score
+from sklearn.metrics import auc, f1_score, balanced_accuracy_score
 
 class CustomMemoryCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
@@ -60,7 +62,7 @@ class build_model():
         
     def preprocessing_layer(self):
         
-        self.norm_layer = Normalization()
+        self.norm_layer = Normalization(axis=-1)
         self.norm_layer.adapt(self.X_tr)       
         
     def define_model(self):
@@ -69,8 +71,10 @@ class build_model():
         num_channels = self.X_tr.shape[3]
 
         input_shape = (imsize, imsize, num_channels)
-
+        
         self.model = Sequential()
+        
+        self.model.add(Input(shape=input_shape))
         
         if self.normalise:
             print('Adding layer')
@@ -112,11 +116,9 @@ class build_model():
             self.model = Model(inputs, outputs)
             
         else:
-            num_channels = self.X_tr.shape[3]
-            input_shape = (imsize, imsize, num_channels)
 
             # Convolutional layers
-            self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu', input_shape = input_shape))
+            self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu'))
             
             if self.batch_norm:
                 self.model.add(BatchNormalization())
@@ -207,27 +209,61 @@ class build_model():
         
         predictions = model.predict(X_te)
 
-        threshold = 0.5
         y_prob = np.array(predictions)
         y_pred = np.array([1 if x > threshold else 0 for x in predictions])
         
         
         fpr, tpr, thresholds = roc_curve(y_te, y_prob)
-        auc = roc_auc_score(y_te, y_prob)
+        
+        roc_auc = roc_auc_score(y_te, y_prob)
+        
+        precision, recall, thresholds = precision_recall_curve(y_te, y_prob)
+        pr_auc = auc(recall, precision)
+        
         precision = precision_score(y_te, y_pred)
         recall = recall_score(y_te, y_pred)
         acc = accuracy_score(y_te, y_pred)
+        
+        ba = balanced_accuracy_score(y_te, y_pred)
+        f1 = f1_score(y_te, y_pred)
 
-        auc = round(auc, 4)
+        roc_auc = round(roc_auc, 4)
         prec = round(precision, 4)
         recall = round(recall, 4)
         acc = round(acc, 4)
-        
-        print('AUC:', auc, '\nPrecision:', prec, '\nRecall:', recall, '\nAccuracy:', acc)
+        pr_auc = round(pr_auc, 4)
+        ba = round(ba, 4)
+        f1 = round(f1, 4)
         
         cm = confusion_matrix(y_te, y_pred)
+    
+        print('AUC:', roc_auc, '\nPrecision:', prec, '\nRecall:', recall, '\nAccuracy:', acc, '\nPR AUC', pr_auc,\
+              '\nBalanced Accuracy', ba, '\nf1_score', f1)
         
-        return auc, prec, recall, acc, cm
+        
+        return roc_auc, prec, recall, acc, pr_auc, ba, f1, cm
+    
+    def output_imbalanced_results(self):
+        extra_x_test = pd.read_csv('../generating_cluster_list/lists/20230705_output_control_sample_extra_images.csv')
+
+        # use existing code to collect and put extra into arrays - data load code..
+
+        from data_load import data_preprocess
+
+        data_prep = data_preprocess(channels=['sz', 'xray'], folding=False, num_pixel=96, redshifts=[1,2,3], normalise=False)
+        sz_X_list, xray_X_list, y_list, indices = data_prep.load_imgs_to_arrays(extra_x_test)
+
+        y = np.array(y_list)
+        indices = np.array(indices)
+        sz_imgs_r = np.asarray(sz_X_list).astype('float32')
+        xray_imgs_r = np.asarray(xray_X_list).astype('float32')
+        X = np.stack((sz_imgs_r, xray_imgs_r), axis=3)
+
+        X_test_add = np.vstack((self.X_test, X))
+        y_test_add = np.concatenate((self.y_test, y))
+        roc_auc, prec, recall, acc, pr_auc, ba, f1, cm = self.output_results(model=model, X_te=X_test_add, y_te=y_test_add, threshold=0.5)
+        
+        
     
     def save_model(self):
         
@@ -238,25 +274,30 @@ class build_model():
 
         else:
             print(folder_name, "folder already exists.")
+        
+        with open(f"./models/readme.txt", 'w') as f:
+            f.write(f'{folder_name} : Description = {self.readme}\n')
             
-        auc, prec, recall, acc, cm = self.output_results()
+        roc_auc, prec, recall, acc, pr_auc, ba, f1, cm = self.output_results()
             
         if self.readme is not None:
             readme = self.readme + '\n' + \
             f'model_type={self.model_type} \nlearning_rate = {self.lr} \nnum_conv_layers = {self.ncl} \nnum_dense_layers = {self.ndl}' \
             f'\nkernel_size = {self.ks} \ndropout_perc= {self.drop} \nbatch_size={self.batch_size} \nn_epochs={self.n_epochs}' \
             f'\nbatch_norm = {self.batch_norm} \ninit_num_filters= {self.i_num_filters} \nearly_stopping_patience= {self.esp}' \
-            f'RESULTS \n auc= {auc}, prec={prec}, recall={recall}, acc={acc} \ncm = {cm}'
+            f'RESULTS \n auc= {auc}, prec={prec}, recall={recall}, acc={acc}, pr_auc={pr_auc}, ba={ba}, f1={f1}, \ncm = {cm}'
 
             with open(f"./{folder_name}/readme.txt", 'w') as f:
                 f.write(readme)
         
         model_json = self.model.to_json()
-
+        
+        print('Saving in tf format')
         self.model.save(folder_name + '/model' ,save_format='tf') 
-
-        with open(folder_name + '/model.json', "w") as json_file:
-            json_file.write(model_json)
-            # serialize weights to HDF5
-        self.model.save_weights(folder_name + '/model.h5')
+        
+        print('Writing JSON file')
+#         with open(folder_name + '/model.json', "w") as json_file:
+#             json_file.write(model_json)
+#             # serialize weights to HDF5
+#         self.model.save_weights(folder_name + '/model.h5')
         print("Saved model to", folder_name)

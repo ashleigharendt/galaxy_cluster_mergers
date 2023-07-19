@@ -15,10 +15,10 @@ from datetime import datetime
 
 class data_preprocess():
     
-    def __init__(self, redshifts=[1,2], classification='binary', folding=False, num_pixel=96, nproj = 29, channels=['sz'], normalise = True, smoothing=False, save=True, readme=None):
+    def __init__(self, redshifts=[1,2], classification='mergers_only', folding=False, num_pixel=96, nproj = 29, channels=['sz'], normalise = True, smoothing=False, save=True, readme=None, r200_zoom=False):
         
         self.redshifts = redshifts
-        self.classification = classification
+        self.classification = classification # 'mergers_only' or 'inc_pre_post'
         self.folding = folding
         self.npxl = num_pixel
         self.nproj = nproj
@@ -27,32 +27,40 @@ class data_preprocess():
         self.smoothing=smoothing
         self.save = save
         self.readme = readme
+        self.r200 = r200_zoom
     
     def get_snapshot_list(self):
         
-        # Loading merging population
-        merging_cluster_list = pd.read_csv('../generating_cluster_list/lists/output_merger_list_75_10000_haloID.csv')
-        merging_cluster_list = merging_cluster_list.rename({'merger_state': 'label'}, axis=1)
+        if self.classification == 'mergers_only':
         
-        # Filter for certain redshift bins
-        merging_cluster_list = merging_cluster_list[merging_cluster_list['z_bin'].isin(self.redshifts)]
-        
-        # If working on a binary classification problem, just select the merging clusters ignoring pre / post
-        if self.classification == 'binary':
-            merging_sample = merging_cluster_list[merging_cluster_list['label'] == 'merging']
-            
-        # Loading control population
-        control_sample = pd.read_csv('../generating_cluster_list/lists/output_control_sample.csv', index_col=False)
-        
-        # Filter for certain redshift bins
-        control_sample = control_sample[control_sample['z_bin'].isin(self.redshifts)]
+            # Loading merging population
+            merging_cluster_list = pd.read_csv('../generating_cluster_list/lists/output_merger_list_75_10000_haloID.csv')
+            merging_cluster_list['label'] = merging_cluster_list['merger_state']
 
-        # Full sample list
-        full_sample = pd.concat([control_sample, merging_sample[control_sample.columns]]).reset_index(drop=True)
+            # Filter for certain redshift bins
+            merging_cluster_list = merging_cluster_list[merging_cluster_list['z_bin'].isin(self.redshifts)]
+
+            # If working on a binary classification problem, just select the merging clusters ignoring pre / post
+            merging_cluster_list = merging_cluster_list[merging_cluster_list['merger_state'] == 'merging']
+
+            # Loading control population
+            control_sample = pd.read_csv('../generating_cluster_list/lists/output_control_sample.csv', index_col=False)
+
+            # Filter for certain redshift bins
+            control_sample = control_sample[control_sample['z_bin'].isin(self.redshifts)]
+
+            # Full sample list
+            full_sample = pd.concat([control_sample, merging_cluster_list[control_sample.columns]]).reset_index(drop=True)
+            cntrl_index = full_sample[full_sample[['region', 'snapshot']].duplicated(keep='last')].index
+            full_sample = full_sample.drop(cntrl_index).reset_index(drop=True)
+
+        # Loading full updated list for pre/post
+        elif self.classification == 'inc_pre_post':
+            full_sample = pd.read_csv('../generating_cluster_list/lists/full_sample_for_pre_post.csv')
         
         return full_sample
         
-    def get_fits_file_loc_sz(self, reg, snap, label):
+    def get_fits_file_loc_sz(self, reg, snap, merger_state):
 
         clnum='0000'+str(reg)
         clnum=clnum[-4:]
@@ -60,16 +68,19 @@ class data_preprocess():
         s_str = str(snap).rjust(3, '0')
         snapname = 'snap_'+s_str
 
-        if label == 'merging':
+        if merger_state == 'merging':
             parent_dir = "/home/ashleigh/mock_map_generator/generating_sz_maps/clusters/varying_AR/merging/method_final/"
-        elif label == 'control':
+        elif merger_state == 'control':
+#             parent_dir ="/home/ashleigh/mock_map_generator/generating_sz_maps/clusters/varying_AR/control/96_px_extra_control/"
             parent_dir = "/home/ashleigh/mock_map_generator/generating_sz_maps/clusters/varying_AR/control/method_final/"
+        elif merger_state in ['pre merger', 'post merger']:
+            parent_dir ="/home/ashleigh/mock_map_generator/generating_sz_maps/clusters/varying_AR/pre_post/"
 
         fits_files = glob.glob(parent_dir + cname + snapname + '*.fits')
         
         return fits_files
     
-    def get_fits_file_loc_xr(self, reg, snap, label, smoothing, energy_range='0.1_15.0'):
+    def get_fits_file_loc_xr(self, reg, snap, merger_state, smoothing, energy_range='0.1_15.0'):
         
         if smoothing:
             loc = 'sph'
@@ -83,6 +94,8 @@ class data_preprocess():
         snapname = 'snap_'+s_str
         
         parent_dir = '/home/ashleigh/mock_map_generator/generating_x_ray_maps/maps/pyatom_' + loc + '/updated_spec_' + energy_range +'/'
+        if merger_state in ['pre merger', 'post merger']:
+            parent_dir = parent_dir + 'pre_post/'
         fits_files = glob.glob(parent_dir + cname + 'UPDATED_' + snapname + '*.fits') #including updated for now to ensure using the right energy range
         
         return fits_files
@@ -90,10 +103,10 @@ class data_preprocess():
     def load_imgs_to_arrays(self, full_sample):
         
         if 'sz' in self.channels:
-            full_sample['fits_file_locs_sz'] = full_sample.apply(lambda x: self.get_fits_file_loc_sz(x['region'], x['snapshot'], x['label']), axis=1)
+            full_sample['fits_file_locs_sz'] = full_sample.apply(lambda x: self.get_fits_file_loc_sz(x['region'], x['snapshot'], x['merger_state']), axis=1)
         
         if 'xray' in self.channels:
-            full_sample['fits_file_locs_xray'] = full_sample.apply(lambda x: self.get_fits_file_loc_xr(x['region'], x['snapshot'], x['label'], smoothing=self.smoothing), axis=1)
+            full_sample['fits_file_locs_xray'] = full_sample.apply(lambda x: self.get_fits_file_loc_xr(x['region'], x['snapshot'], x['merger_state'], smoothing=self.smoothing), axis=1)
             
         sz_X_list = []
         xray_X_list = []
@@ -102,6 +115,9 @@ class data_preprocess():
         
         def load_and_resize(img):
             img = np.array(Image.fromarray(img))
+            if self.r200:
+                img_size = img.shape[0]
+                img = img[int(img_size/4):int(3*img_size/4), int(img_size/4):int(3*img_size/4)]
             img = cv2.resize(img, dsize=(self.npxl, self.npxl), interpolation=cv2.INTER_AREA)
             return img
             
@@ -127,7 +143,6 @@ class data_preprocess():
             if 'xray' in self.channels:
                 for f in row['fits_file_locs_xray'][0:self.nproj]:
                     sort_imgs(f, xray_X_list)
-#                     print('avg values', np.mean(xray_X_list[index]))
                     if len(self.channels) == 1:
                         indices.append(index)
                         y_list.append(label_ind)
@@ -140,16 +155,13 @@ class data_preprocess():
         self.indices = np.array(indices)
         
         if 'sz' in self.channels:
-#             sz_imgs_r = [cv2.resize(img, dsize=(self.npxl, self.npxl), interpolation=cv2.INTER_AREA) for img in sz_X_list]
-#             sz_imgs_r = np.asarray(sz_imgs_r).astype('float32')
             sz_imgs_r = np.asarray(sz_X_list).astype('float32')
 
         if 'xray' in self.channels:
-#             xray_imgs_r = [cv2.resize(img, dsize=(self.npxl, self.npxl), interpolation=cv2.INTER_AREA) for img in xray_X_list]
-#             xray_imgs_r = np.asarray(xray_imgs_r).astype('float32')
             xray_imgs_r = np.asarray(xray_X_list).astype('float32')
 
         if len(self.channels) == 2:
+            print(sz_imgs_r.shape, xray_imgs_r.shape)
             self.X = np.stack((sz_imgs_r, xray_imgs_r), axis=3)
             print(self.X)
 
@@ -165,7 +177,6 @@ class data_preprocess():
         # Train test split - need to ensure each cluster (and all projections) are kept in the same group
         train_p = (1-test_p)*0.9
         valid_p = (1-test_p)*0.1
-
 
         df_train, df_valtest = train_test_split(full_sample, test_size=(1-train_p), random_state=58)
 
@@ -221,20 +232,21 @@ class data_preprocess():
     
         return sz_imgs_n  
          
-    def create_training_sets(self, test_p, input_arrays = [], **iteration):
+    def create_training_sets(self, test_p, input_arrays = [], full_sample=[], **iteration):
         
         # Iteration is optional depending on whether folding
-        full_sample=self.get_snapshot_list()
-        self.train_val_test_split(test_p, full_sample)
          
         if len(input_arrays) == 0:
+            full_sample=self.get_snapshot_list()
             sz_X_list, xray_X_list, y_list, indices = self.load_imgs_to_arrays(full_sample)
         else:
+            full_sample = full_sample[0]
             sz_X_list, xray_X_list, y_list, indices = input_arrays
+            
+        self.train_val_test_split(test_p, full_sample)
         
         print('resize and reshape')
         self.resize_and_reshape(sz_X_list, xray_X_list, y_list, indices)
-
         
         if self.folding:
             self.train_indices = self.train_dict[iteration['iteration']]
@@ -267,6 +279,9 @@ class data_preprocess():
 
             else:
                 print(folder_name, "folder already exists.")
+                
+            with open(f"./data/readme.txt", 'w') as f:
+                f.write(f'{folder_name} : Description = {self.readme}\n')
                 
             self.folder_loc = folder_name
             
