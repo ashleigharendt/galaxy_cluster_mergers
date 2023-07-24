@@ -15,7 +15,7 @@ from datetime import datetime
 
 class data_preprocess():
     
-    def __init__(self, redshifts=[1,2], classification='mergers_only', folding=False, num_pixel=96, nproj = 29, channels=['sz'], normalise = True, smoothing=False, save=True, readme=None, r200_zoom=False):
+    def __init__(self, redshifts=[1,2], classification='mergers_only', folding=False, num_pixel=96, nproj = 29, channels=['sz'], normalise = True, smoothing=False, save=True, readme=None, r200_zoom=False, energy_range='0.1_15.0'):
         
         self.redshifts = redshifts
         self.classification = classification # 'mergers_only' or 'inc_pre_post'
@@ -28,6 +28,7 @@ class data_preprocess():
         self.save = save
         self.readme = readme
         self.r200 = r200_zoom
+        self.energy_range = energy_range
     
     def get_snapshot_list(self):
         
@@ -48,6 +49,7 @@ class data_preprocess():
 
             # Filter for certain redshift bins
             control_sample = control_sample[control_sample['z_bin'].isin(self.redshifts)]
+            control_sample['merger_state'] = ['control']*len(control_sample)
 
             # Full sample list
             full_sample = pd.concat([control_sample, merging_cluster_list[control_sample.columns]]).reset_index(drop=True)
@@ -80,7 +82,7 @@ class data_preprocess():
         
         return fits_files
     
-    def get_fits_file_loc_xr(self, reg, snap, merger_state, smoothing, energy_range='0.1_15.0'):
+    def get_fits_file_loc_xr(self, reg, snap, merger_state, smoothing):
         
         if smoothing:
             loc = 'sph'
@@ -93,9 +95,9 @@ class data_preprocess():
         s_str = str(snap).rjust(3, '0')
         snapname = 'snap_'+s_str
         
-        parent_dir = '/home/ashleigh/mock_map_generator/generating_x_ray_maps/maps/pyatom_' + loc + '/updated_spec_' + energy_range +'/'
-        if merger_state in ['pre merger', 'post merger']:
-            parent_dir = parent_dir + 'pre_post/'
+        parent_dir = '/home/ashleigh/mock_map_generator/generating_x_ray_maps/maps/pyatom_' + loc + '/updated_spec_' + self.energy_range +'/'
+#         if merger_state in ['pre merger', 'post merger']:
+#             parent_dir = parent_dir + 'pre_post/'
         fits_files = glob.glob(parent_dir + cname + 'UPDATED_' + snapname + '*.fits') #including updated for now to ensure using the right energy range
         
         return fits_files
@@ -280,8 +282,13 @@ class data_preprocess():
             else:
                 print(folder_name, "folder already exists.")
                 
-            with open(f"./data/readme.txt", 'w') as f:
-                f.write(f'{folder_name} : Description = {self.readme}\n')
+                                
+            if not os.path.isfile(f"./data/readme.txt"):
+                with open(f"./data/readme.txt", 'w') as f:
+                    f.write(f'{folder_name} : Description = {self.readme}\n')
+            else:
+                with open(f"./data/readme.txt", 'a') as f:
+                    f.write(f'{folder_name} : Description = {self.readme}\n')  
                 
             self.folder_loc = folder_name
             

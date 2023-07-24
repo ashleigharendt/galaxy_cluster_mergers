@@ -17,6 +17,7 @@ import tensorflow as tf
 import gc
 import os
 import pandas as pd
+import random
 
 import json
 from datetime import datetime
@@ -198,7 +199,7 @@ class build_model():
         axis1.legend(loc='upper left')
         plt.show()
 
-    def output_results(self, model=None, X_te=None, y_te=None, threshold=0.5):
+    def output_results(self, model=None, X_te=None, y_te=None, threshold=0.5, imbalanced=True, p_merg=0.17):
         
         if model is None:
             model = self.model
@@ -206,13 +207,27 @@ class build_model():
             X_te = self.X_te
         if y_te is None:
             y_te = self.y_te
+            
+        if imbalanced:
+            y_control_ind = list(np.where(y_te[:] == 0)[0])
+            y_merg_ind = list(np.where(y_te[:] == 1)[0])
+
+            y_cont = len(y_control_ind)
+            y_merg = int((p_merg/(1-p_merg))*y_cont)
+
+            merg_ind_new = random.sample(y_merg_ind, y_merg)
+            ind_new = merg_ind_new + y_control_ind
+
+            X_te = X_te[ind_new]
+            y_te = y_te[ind_new]  # 0.17 for pre/post?
+            
+        print('% imbalance in the test set %cntrl-%merg', np.unique(y_te, return_counts=True)[1]*100/len(y_te))
         
         predictions = model.predict(X_te)
 
         y_prob = np.array(predictions)
         y_pred = np.array([1 if x > threshold else 0 for x in predictions])
-        
-        
+
         fpr, tpr, thresholds = roc_curve(y_te, y_prob)
         
         roc_auc = roc_auc_score(y_te, y_prob)
@@ -240,32 +255,9 @@ class build_model():
         print('AUC:', roc_auc, '\nPrecision:', prec, '\nRecall:', recall, '\nAccuracy:', acc, '\nPR AUC', pr_auc,\
               '\nBalanced Accuracy', ba, '\nf1_score', f1)
         
-        
         return roc_auc, prec, recall, acc, pr_auc, ba, f1, cm
-    
-    def output_imbalanced_results(self):
-        extra_x_test = pd.read_csv('../generating_cluster_list/lists/20230705_output_control_sample_extra_images.csv')
 
-        # use existing code to collect and put extra into arrays - data load code..
-
-        from data_load import data_preprocess
-
-        data_prep = data_preprocess(channels=['sz', 'xray'], folding=False, num_pixel=96, redshifts=[1,2,3], normalise=False)
-        sz_X_list, xray_X_list, y_list, indices = data_prep.load_imgs_to_arrays(extra_x_test)
-
-        y = np.array(y_list)
-        indices = np.array(indices)
-        sz_imgs_r = np.asarray(sz_X_list).astype('float32')
-        xray_imgs_r = np.asarray(xray_X_list).astype('float32')
-        X = np.stack((sz_imgs_r, xray_imgs_r), axis=3)
-
-        X_test_add = np.vstack((self.X_test, X))
-        y_test_add = np.concatenate((self.y_test, y))
-        roc_auc, prec, recall, acc, pr_auc, ba, f1, cm = self.output_results(model=model, X_te=X_test_add, y_te=y_test_add, threshold=0.5)
-        
-        
-    
-    def save_model(self):
+    def save_model(self, imbalanced=True):
         
         folder_name = "./models/model_{}".format(datetime.now().strftime('%d-%m-%Y-%H-%M'))
         if not os.path.isdir(folder_name):
@@ -275,17 +267,21 @@ class build_model():
         else:
             print(folder_name, "folder already exists.")
         
-        with open(f"./models/readme.txt", 'w') as f:
-            f.write(f'{folder_name} : Description = {self.readme}\n')
-            
-        roc_auc, prec, recall, acc, pr_auc, ba, f1, cm = self.output_results()
+        if not os.path.isfile(f"./models/readme.txt"):
+            with open(f"./models/readme.txt", 'w') as f:
+                f.write(f'{folder_name} : Description = {self.readme}\n')
+        else:
+            with open(f"./models/readme.txt", 'a') as f:
+                f.write(f'{folder_name} : Description = {self.readme}\n')            
+        
+        roc_auc, prec, recall, acc, pr_auc, ba, f1, cm = self.output_results(imbalanced=imbalanced)
             
         if self.readme is not None:
             readme = self.readme + '\n' + \
             f'model_type={self.model_type} \nlearning_rate = {self.lr} \nnum_conv_layers = {self.ncl} \nnum_dense_layers = {self.ndl}' \
             f'\nkernel_size = {self.ks} \ndropout_perc= {self.drop} \nbatch_size={self.batch_size} \nn_epochs={self.n_epochs}' \
             f'\nbatch_norm = {self.batch_norm} \ninit_num_filters= {self.i_num_filters} \nearly_stopping_patience= {self.esp}' \
-            f'RESULTS \n auc= {auc}, prec={prec}, recall={recall}, acc={acc}, pr_auc={pr_auc}, ba={ba}, f1={f1}, \ncm = {cm}'
+            f'RESULTS \n auc= {roc_auc}, prec={prec}, recall={recall}, acc={acc}, pr_auc={pr_auc}, ba={ba}, f1={f1}, \ncm = {cm}'
 
             with open(f"./{folder_name}/readme.txt", 'w') as f:
                 f.write(readme)
