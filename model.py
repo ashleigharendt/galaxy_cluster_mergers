@@ -8,7 +8,7 @@ import numpy as np
 from memory_profiler import profile
 
 from keras.layers import Input, Flatten, Dense, Activation, Dropout, BatchNormalization, \
-Conv2D, MaxPool2D, GlobalAveragePooling2D, Normalization
+Conv2D, MaxPool2D, GlobalAveragePooling2D, Normalization, ReLU, Concatenate
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.models import Model, Sequential, model_from_json
@@ -34,7 +34,7 @@ class CustomMemoryCallback(tf.keras.callbacks.Callback):
 class build_model():
     
     def __init__(self, X_train=None, y_train=None, X_valid=None, y_valid=None, X_test=None, y_test=None, \
-                 model_type='', classification='binary', learning_rate=0.0001, num_conv_layers=3, \
+                 model_type='one_head', classification='binary', learning_rate=0.0001, num_conv_layers=3, \
                 num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100,64,32], early_stopping_patience=15, readme=None, pretrained=False, n_layers_unfrozen=0, normalise=True):
         
         self.X_tr = X_train
@@ -61,91 +61,154 @@ class build_model():
         self.n_layers_unfrozen = n_layers_unfrozen
         self.normalise = normalise
         
-    def preprocessing_layer(self):
+    def preprocessing_layer(self, norm_data):
         
         self.norm_layer = Normalization(axis=-1)
-        self.norm_layer.adapt(self.X_tr)       
+        self.norm_layer.adapt(norm_data)  
         
     def define_model(self):
         
         imsize = self.X_tr.shape[1]
-        num_channels = self.X_tr.shape[3]
-
-        input_shape = (imsize, imsize, num_channels)
         
-        self.model = Sequential()
-        
-        self.model.add(Input(shape=input_shape))
-        
-        if self.normalise:
-            print('Adding layer')
-            self.model.add(self.norm_layer)
-
         if self.pretrained:
             self.X_tr = np.repeat(self.X_tr, 3, axis=3)
             self.X_v = np.repeat(self.X_v, 3, axis=3)
             self.X_te = np.repeat(self.X_te, 3, axis=3)
-            
+
             self.X_tr = preprocess_input(self.X_tr)
             self.X_v = preprocess_input(self.X_v)
             self.X_te = preprocess_input(self.X_te)
-            
+
             rn_model = ResNet50(
                 weights='imagenet',  # Load weights pre-trained on ImageNet.
                 input_shape=(96, 96, 3),
                 include_top=False)
-            
+
             rn_model.trainable = False
-            
+
             if self.n_layers_unfrozen > 0:
                 for layer in rn_model.layers[-self.n_layers_unfrozen:]:
                     layer.trainable = True
                 training=True
             else:
                 training=False
-            
+
             num_channels = self.X_tr.shape[3]
             input_shape = (imsize, imsize, num_channels)
-            
+
             inputs = Input(shape=input_shape)
 
             x = rn_model(inputs, training=training)
 
             x = GlobalAveragePooling2D()(x)
             outputs = Dense(1)(x)
-            
-            self.model = Model(inputs, outputs)
-            
-        else:
 
-            # Convolutional layers
-            self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation ='relu'))
+            self.model = Model(inputs, outputs)
+            pass   
+        
+
+        
+        if self.model_type == 'multihead':
+            ## do input section for multihead - could try and simplify these two if get time
+            
+            input_shape = (imsize, imsize, 1)
             
             if self.batch_norm:
-                self.model.add(BatchNormalization())
-            self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))  
+                activation = None
+            else:
+                activation = 'relu'
+                
+            #SZ head
+            sz_inp = Input(shape = input_shape)
+            if self.normalise:
+                self.preprocessing_layer(self.X_tr[:,:,:,0].reshape((-1,96,96,1)))
+                sz_layer = self.norm_layer(sz_inp)
             
             for i in range(1, self.ncl):
-                self.model.add(Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation ='relu'))
+                sz_layer = Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation =activation)(sz_layer)
+                if self.batch_norm:
+                    sz_layer = BatchNormalization()(sz_layer)
+                    sz_layer = ReLU()(sz_layer)
+                sz_layer = MaxPool2D(pool_size=(2,2), strides=2, padding='valid')(sz_layer)
+            
+            sz_g = GlobalAveragePooling2D()(sz_layer)
+                        
+            #X-ray head            
+            xr_inp = Input(shape= input_shape)
+            if self.normalise:
+                self.preprocessing_layer(self.X_tr[:,:,:,1].reshape((-1,96,96,1)))
+                xr_layer = self.norm_layer(xr_inp)
+            
+            for i in range(0, self.ncl):
+                xr_layer = Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation =activation)(xr_layer)
+                if self.batch_norm:
+                    xr_layer = BatchNormalization()(xr_layer)
+                    xr_layer = ReLU()(xr_layer)
+                xr_layer = MaxPool2D(pool_size=(2,2), strides=2, padding='valid')(xr_layer)
+            
+            xr_g = GlobalAveragePooling2D()(xr_layer)
+
+            d = Concatenate(name="concat_layer")([sz_g, xr_g])
+
+            for i in range(self.ndl, 0, -1):
+                d = Dense(self.dnl[-i], activation = "relu")(d)
+                if self.drop > 0:
+                    d = Dropout(self.drop)(d)
+
+            do = Dense(1, activation = "sigmoid", name="preds")(d)
+
+            self.model = Model(inputs=[sz_inp, xr_inp], outputs=do)
+          
+        
+        else:
+            num_channels = self.X_tr.shape[3]
+        
+            input_shape = (imsize, imsize, num_channels)
+            self.model = Sequential()
+            self.model.add(Input(shape=input_shape))
+
+            if self.normalise:
+                self.preprocessing_layer(self.X_tr)
+                print('Adding layer')
+                self.model.add(self.norm_layer)
+                
+            if self.batch_norm:
+                activation = None
+            else:
+                activation = 'relu'
+
+            # Convolutional layers
+            self.model.add(Conv2D(filters = self.i_num_filters, kernel_size = (3,3),padding = 'Same', activation =activation))
+
+            if self.batch_norm:
+                self.model.add(BatchNormalization()) # batch norm sandwiched between conv and relu layers
+                self.model.add(ReLU())
+
+            self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid'))  
+
+            for i in range(1, self.ncl):
+                self.model.add(Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation =activation))
                 if self.batch_norm:
                     self.model.add(BatchNormalization())
+                    self.model.add(ReLU())
+
                 self.model.add(MaxPool2D(pool_size=(2,2), strides=2, padding='valid')) 
 
-        # Fully connected
-        self.model.add(GlobalAveragePooling2D())
+            # Fully connected
+            self.model.add(GlobalAveragePooling2D())
 
-        for i in range(self.ndl, 0, -1):
-            self.model.add(Dense(self.dnl[-i], activation = "relu"))
+            for i in range(self.ndl, 0, -1):
+                self.model.add(Dense(self.dnl[-i], activation = "relu"))
 
-            if self.drop > 0:
-                self.model.add(Dropout(self.drop))
-                      
-        self.model.add(Dense(1, activation = "sigmoid", name="preds"))
+                if self.drop > 0:
+                    self.model.add(Dropout(self.drop))
+
+            self.model.add(Dense(1, activation = "sigmoid", name="preds"))
 
     def compile_model(self):
         
-        if self.normalise:
-            self.preprocessing_layer()
+#         if self.normalise:
+#             self.preprocessing_layer()
         self.define_model()
         # Compile Model
         optimizer = Adam(learning_rate=self.lr)
@@ -162,13 +225,27 @@ class build_model():
 #         mem = CustomMemoryCallback()
                            
         # Train
-        self.history = self.model.fit(self.X_tr, self.y_tr, 
-                          batch_size=self.batch_size, 
-                          epochs=self.n_epochs, 
-                          steps_per_epoch=self.X_tr.shape[0] // self.batch_size,
-                          validation_data=(self.X_v, self.y_v),
-                          shuffle=True,
-                        callbacks=[es], verbose=verbose)
+        if self.model_type == 'multihead':
+            sz_input = self.X_tr[:,:,:,0]
+            xr_input = self.X_tr[:,:,:,1]
+            sz_val = self.X_v[:,:,:,0]
+            xr_val = self.X_v[:,:,:,1]
+            # Train
+            self.history = self.model.fit([sz_input, xr_input], self.y_tr, 
+                              batch_size=self.batch_size, 
+                              epochs=self.n_epochs, 
+                              validation_data=([sz_val, xr_val],self.y_v),
+                              shuffle=True,
+                            callbacks=[es], verbose=verbose)
+            
+        else:
+            self.history = self.model.fit(self.X_tr, self.y_tr, 
+                              batch_size=self.batch_size, 
+                              epochs=self.n_epochs, 
+                              steps_per_epoch=self.X_tr.shape[0] // self.batch_size,
+                              validation_data=(self.X_v, self.y_v),
+                              shuffle=True,
+                            callbacks=[es], verbose=verbose)
             
     def visualise_success(self, verbose=True):
         
@@ -272,7 +349,10 @@ class build_model():
                 f.write(f'{folder_name} : Description = {self.readme}\n')
         else:
             with open(f"./models/readme.txt", 'a') as f:
-                f.write(f'{folder_name} : Description = {self.readme}\n')            
+                f.write(f'{folder_name} : Description = {self.readme}\n')
+        
+        print('Saving in tf format')
+        self.model.save(folder_name + '/model' ,save_format='tf') 
         
         roc_auc, prec, recall, acc, pr_auc, ba, f1, cm = self.output_results(imbalanced=imbalanced)
             
@@ -287,9 +367,6 @@ class build_model():
                 f.write(readme)
         
         model_json = self.model.to_json()
-        
-        print('Saving in tf format')
-        self.model.save(folder_name + '/model' ,save_format='tf') 
         
         print('Writing JSON file')
 #         with open(folder_name + '/model.json', "w") as json_file:
