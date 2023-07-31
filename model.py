@@ -8,11 +8,12 @@ import numpy as np
 from memory_profiler import profile
 
 from keras.layers import Input, Flatten, Dense, Activation, Dropout, BatchNormalization, \
-Conv2D, MaxPool2D, GlobalAveragePooling2D, Normalization, ReLU, Concatenate
-from keras.layers.convolutional import Convolution2D, MaxPooling2D
+Conv2D, MaxPool2D, GlobalAveragePooling2D, Normalization, ReLU, Concatenate, Lambda
+# from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.models import Model, Sequential, model_from_json
 from keras.optimizers import Adam
+import keras.backend as K
 import tensorflow as tf
 import gc
 import os
@@ -35,7 +36,7 @@ class build_model():
     
     def __init__(self, X_train=None, y_train=None, X_valid=None, y_valid=None, X_test=None, y_test=None, \
                  model_type='one_head', classification='binary', learning_rate=0.0001, num_conv_layers=3, \
-                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100,64,32], early_stopping_patience=15, readme=None, pretrained=False, n_layers_unfrozen=0, normalise=True):
+                num_dense_layers=4, batch_size=32, n_epochs=20, kernel_size=3, dropout_perc=0, batch_norm=False, init_num_filters=16, dense_neuron_list = [200,200,100,64,32], early_stopping_patience=15, readme=None, pretrained=False, n_layers_unfrozen=0, normalise=True, log=False):
         
         self.X_tr = X_train
         self.y_tr = y_train
@@ -60,11 +61,13 @@ class build_model():
         self.pretrained = pretrained
         self.n_layers_unfrozen = n_layers_unfrozen
         self.normalise = normalise
+        self.log = log
         
     def preprocessing_layer(self, norm_data):
-        
+         
         self.norm_layer = Normalization(axis=-1)
-        self.norm_layer.adapt(norm_data)  
+        self.norm_layer.adapt(norm_data)
+
         
     def define_model(self):
         
@@ -119,12 +122,12 @@ class build_model():
                 activation = 'relu'
                 
             #SZ head
-            sz_inp = Input(shape = input_shape)
+            sz_inp = Input(shape = input_shape, name="sz")
             if self.normalise:
                 self.preprocessing_layer(self.X_tr[:,:,:,0].reshape((-1,96,96,1)))
                 sz_layer = self.norm_layer(sz_inp)
             
-            for i in range(1, self.ncl):
+            for i in range(0, self.ncl):
                 sz_layer = Conv2D(filters = self.i_num_filters*(2**i), kernel_size = (self.ks, self.ks), padding = 'Same', activation =activation)(sz_layer)
                 if self.batch_norm:
                     sz_layer = BatchNormalization()(sz_layer)
@@ -134,7 +137,7 @@ class build_model():
             sz_g = GlobalAveragePooling2D()(sz_layer)
                         
             #X-ray head            
-            xr_inp = Input(shape= input_shape)
+            xr_inp = Input(shape= input_shape, name="xray")
             if self.normalise:
                 self.preprocessing_layer(self.X_tr[:,:,:,1].reshape((-1,96,96,1)))
                 xr_layer = self.norm_layer(xr_inp)
@@ -219,6 +222,11 @@ class build_model():
     
     def train_model(self, verbose):
         
+        if self.log:
+            self.X_tr = np.log(self.X_tr, where=(self.X_tr > 0))
+            self.X_v = np.log(self.X_v, where=(self.X_v > 0))
+            self.X_te = np.log(self.X_te, where=(self.X_te > 0))
+        
         self.compile_model()
     
         es = EarlyStopping(monitor='val_loss', patience=self.esp) 
@@ -300,7 +308,10 @@ class build_model():
             
         print('% imbalance in the test set %cntrl-%merg', np.unique(y_te, return_counts=True)[1]*100/len(y_te))
         
-        predictions = model.predict(X_te)
+        if self.model_type == 'multihead':
+            predictions = model.predict([X_te[:,:,:,0].reshape((-1,96,96,1)), X_te[:,:,:,1].reshape((-1,96,96,1))])
+        else:
+            predictions = model.predict(X_te)
 
         y_prob = np.array(predictions)
         y_pred = np.array([1 if x > threshold else 0 for x in predictions])
